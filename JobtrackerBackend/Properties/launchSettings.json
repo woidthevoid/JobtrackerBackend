@@ -1,0 +1,16 @@
+﻿{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "https": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "https://localhost:7170;http://localhost:5093",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Supabase__Url": "https://znlyezdoxqdkravzrqhy.supabase.co",
+        "Supabase__Key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpubHllemRveHFka3JhdnpycWh5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg4NzQ4NjMsImV4cCI6MjA2NDQ1MDg2M30.H6HaVJAdIK1Dxa2OZWyLV6MWhWDDHUneIWbRVSCvsYU",
+      }
+    }
+  }
+}

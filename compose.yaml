@@ -1,0 +1,7 @@
+﻿services:
+  jobtrackerbackend:
+    image: jobtrackerbackend
+    build:
+      context: .
+      dockerfile: JobtrackerBackend/Dockerfile
+

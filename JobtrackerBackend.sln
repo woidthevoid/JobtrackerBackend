@@ -1,0 +1,21 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "JobtrackerBackend", "JobtrackerBackend\JobtrackerBackend.csproj", "{209FC859-C84E-4325-9D83-A5945E8AFC2F}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{B8D5E917-2C20-45E9-B304-CACE849E077E}"
+	ProjectSection(SolutionItems) = preProject
+		compose.yaml = compose.yaml
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{209FC859-C84E-4325-9D83-A5945E8AFC2F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{209FC859-C84E-4325-9D83-A5945E8AFC2F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{209FC859-C84E-4325-9D83-A5945E8AFC2F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{209FC859-C84E-4325-9D83-A5945E8AFC2F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
