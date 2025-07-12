@@ -4,16 +4,14 @@ namespace JobtrackerBackend;
 
 public static class ClaimsPrincipalExtensions
 {
-    public static Guid? GetUserId( this ClaimsPrincipal claimsPrincipal)
+    public static string? GetUserId(this ClaimsPrincipal user)
     {
-        var userIdClaim = claimsPrincipal.FindFirst(ClaimTypes.NameIdentifier) ??
-                          claimsPrincipal.FindFirst("sub");
-
-        if (userIdClaim != null && Guid.TryParse(userIdClaim.Value, out Guid userId))
-        {
-            return userId;
-        }
-
-        return null;
+        return user.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            ?? user.FindFirst("sub")?.Value;
+    } 
+    public static string? GetToken(this ClaimsPrincipal user)
+    {
+        var identity = user.Identity as ClaimsIdentity;
+        return identity?.BootstrapContext as string;
     }
 }

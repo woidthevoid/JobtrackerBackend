@@ -1,271 +1,211 @@
-using Supabase;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+using Microsoft.AspNetCore.Authentication;
 using JobtrackerBackend;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
-using System.Text;
-using System.Security.Claims;
+using Newtonsoft.Json;
+using Supabase;
+using Supabase.Postgrest;
+using Client = Supabase.Client;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Load from configuration/environment
-var supabaseUrl = builder.Configuration["Supabase:Url"];
-var supabaseKey = builder.Configuration["Supabase:Key"];
-var jwtSecret = builder.Configuration["Supabase:ServiceRoleKey"];
+builder.Services.AddEndpointsApiExplorer();
 
-if (string.IsNullOrEmpty(supabaseUrl) || string.IsNullOrEmpty(supabaseKey) || string.IsNullOrEmpty(jwtSecret))
-{
-    throw new InvalidOperationException("Supabase URL, Key, or JWT Secret is not configured. Please check appsettings.json or environment variables.");
-}
+builder.Services.AddAuthorization();
 
-builder.Services.AddSingleton<Supabase.Client>(_ =>
-{
-    var options = new Supabase.SupabaseOptions
-    {
-        AutoConnectRealtime = true
-    };
+builder.Services.AddHttpClient();
 
-    var client = new Supabase.Client(supabaseUrl, supabaseKey, options);
-    client.InitializeAsync().Wait();
-    return client;
-});
+builder.Services.AddHttpContextAccessor();
 
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-}).AddJwtBearer(options =>
+var bytes = Encoding.UTF8.GetBytes(builder.Configuration["Supabase:JwtSecret"]!);
+
+builder.Services.AddAuthentication().AddJwtBearer(options =>
 {
     options.TokenValidationParameters = new TokenValidationParameters
     {
-        ValidateIssuer = true,
-        ValidateAudience = true,
-        ValidateLifetime = true,
         ValidateIssuerSigningKey = true,
-        ValidIssuer = "supabase",
-        ValidAudience = "authenticated",
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
-        ClockSkew = TimeSpan.Zero
-    };
-
-    options.Events = new JwtBearerEvents
-    {
-        OnAuthenticationFailed = context =>
-        {
-            Console.WriteLine($"Authentication failed: {context.Exception.Message}");
-            return Task.CompletedTask;
-        },
-        OnTokenValidated = context =>
-        {
-            Console.WriteLine("Token validated successfully.");
-            foreach (var claim in context.Principal.Claims)
-            {
-                Console.WriteLine($"Claim: {claim.Type} = {claim.Value}");
-            }
-
-            return Task.CompletedTask;
-        },
-        OnChallenge = context =>
-        {
-            Console.WriteLine($"Authentication challenge: {context.ErrorDescription}");
-            return Task.CompletedTask;
-        }
+        IssuerSigningKey = new SymmetricSecurityKey(bytes),
+        ValidAudience = builder.Configuration["Auth:validAudience"],
+        ValidIssuer = builder.Configuration["Auth:Issuer"],
     };
 });
 
-builder.Services.AddAuthorization();
-builder.Services.AddOpenApi();
-builder.Services.AddEndpointsApiExplorer();
-builder.WebHost.UseUrls("http://localhost:5050");
+builder.Services.AddScoped( provider =>
+{
+    var supabaseUrl = builder.Configuration["Supabase:Url"];
+    var supabaseKey = builder.Configuration["Supabase:Key"];
+    var options = new SupabaseOptions { AutoConnectRealtime = false };
+
+    var client = new Client(supabaseUrl, supabaseKey, options);
+    client.InitializeAsync().Wait();
+    return client;
+});
 
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
+    app.UseDeveloperExceptionPage();
 }
 
-app.UseHttpsRedirection();
-
-app.UseAuthentication();
-app.UseAuthorization();
-
-app.MapGet("/jobs", async (Supabase.Client client, ClaimsPrincipal user) =>
+static Guid? GetUserIdFromJwt(string jwt)
 {
-    if (!user.Identity?.IsAuthenticated ?? true)
+    var handler = new JwtSecurityTokenHandler();
+    var token = handler.ReadJwtToken(jwt);
+    if (Guid.TryParse(token.Subject, out var userId))
+        return userId;
+    return null;
+}
+
+app.MapGet("/jobs", async (
+    IHttpContextAccessor httpContextAccessor,
+    IHttpClientFactory httpClientFactory,
+    IConfiguration config
+) =>
+{
+    var request = httpContextAccessor.HttpContext?.Request;
+    var token = request?.Headers["Authorization"].ToString().Replace("Bearer ", "");
+    Console.WriteLine("Token" + token);
+
+    if (string.IsNullOrWhiteSpace(token))
     {
         return Results.Unauthorized();
     }
 
-    var userId = user.GetUserId();
-    if (userId == null)
-    {
-        Console.WriteLine("User ID not found in token claims");
-        return Results.Forbid();
-    }
-    
+    var supabaseUrl = config["Supabase:Url"];
+    var client = httpClientFactory.CreateClient();
+    client.DefaultRequestHeaders.Authorization =
+        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+    client.DefaultRequestHeaders.Add("apiKey", config["Supabase:Key"]);
+
+    var url = $"{supabaseUrl}/rest/v1/job_applications?select=*";
+
     try
     {
-        var result = await client.From<JobApplication>()
-            .Where(j => j.UserId == userId)
-            .Get();
-        var jobs = result.Models;
-
-        var jobDtos = jobs.Select(job => new JobApplicationDto
+        var response = await client.GetAsync(url);
+        if (!response.IsSuccessStatusCode)
         {
-            Id = job.Id,
-            UserId = job.UserId,
-            Title = job.Title,
-            Description = job.Description,
-            JobLink = job.JobLink,
-            CvFileUrl = job.CvFileUrl,
-            AppFileUrl = job.AppFileUrl,
-            ApplicationStatus = job.ApplicationStatus,
-            CreatedAt = job.CreatedAt,
-        }).ToList();
-        
-        return Results.Ok(jobDtos);
+            Console.WriteLine($"Failed to fetch jobs. Status: {response.StatusCode}");
+            return Results.StatusCode((int)response.StatusCode);
+        }
+
+        var json = await response.Content.ReadAsStringAsync();
+        return Results.Content(json, "application/json");
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"Error fetching for user {userId}: {ex.Message}");
-        return Results.Problem("Internal error: " + ex.Message);
+        Console.WriteLine($"Exception while fetching jobs: {ex.Message}");
+        return Results.Problem("Could not fetch job applications.");
     }
-})
-.RequireAuthorization();
+}).RequireAuthorization();
 
-app.MapDelete("/jobs/{id}", async (Guid id, Supabase.Client client, ClaimsPrincipal user) =>
+app.MapPost("/jobs", async (
+    IHttpContextAccessor httpContextAccessor,
+    IHttpClientFactory httpClientFactory,
+    IConfiguration config,
+    Client supabase, // 👈 injected Supabase Client
+    [FromForm] CreateJobApplicationViewModel formData
+) =>
 {
-    if (!user.Identity?.IsAuthenticated ?? true)
+    var userIdClaim = httpContextAccessor.HttpContext.User.FindFirst(ClaimTypes.NameIdentifier);
+    if (userIdClaim == null || !Guid.TryParse(userIdClaim.Value, out var clientUserId))
     {
         return Results.Unauthorized();
     }
+    var token = await httpContextAccessor.HttpContext!.GetTokenAsync("access_token");
 
-    var userId = user.GetUserId();
-    if (userId == null)
-    {
-        Console.WriteLine("User ID not found in token claims for delete operation");
-        return Results.Forbid();
-    }
-    
-    try
-    {
-        var jobDelete = await client.From<JobApplication>()
-            .Where(j => j.Id == id && j.UserId == userId)
-            .Get();
-
-        if (!jobDelete.Models.Any())
-        {
-            return Results.NotFound($"Job with id {id} not found or does not belong to user");
-        }
-
-        await client.From<JobApplication>()
-            .Where(j => j.Id == id)
-            .Delete();
-        
-        return Results.Ok($"Job with id {id} deleted successfully");
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"Error deleting job with id {id}: {ex.Message}");
-        return Results.Problem("Internal error: " + ex.Message);
-    }
-})
-.RequireAuthorization();
-
-app.MapPost("/jobs", async ([FromForm] CreateJobApplicationViewModel model, Supabase.Client client, ClaimsPrincipal user) =>
-{
-    if (!user.Identity?.IsAuthenticated ?? true)
-    {
+    if (string.IsNullOrWhiteSpace(token))
         return Results.Unauthorized();
-    }
-    
-    var userId = user.GetUserId();
+
+    var dummyRefreshToken = "dummy_refresh_token_for_supabase_net"; 
+
+    await supabase.Auth.SetSession(token, dummyRefreshToken, false);
+
+    var userId = GetUserIdFromJwt(token);
     if (userId == null)
+        return Results.Unauthorized();
+
+    var supabaseUrl = config["Supabase:Url"];
+    var client = httpClientFactory.CreateClient();
+    client.DefaultRequestHeaders.Authorization =
+        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+    client.DefaultRequestHeaders.Add("apiKey", config["Supabase:Key"]);
+
+    async Task<string?> UploadFile(IFormFile file, string bucket, string path)
     {
-        Console.WriteLine("User ID not found in token claims for post operation");
-        return Results.Forbid();
+        var stream = file.OpenReadStream();
+        var content = new StreamContent(stream);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(file.ContentType);
+
+        var response = await client.PutAsync($"{supabaseUrl}/storage/v1/object/{bucket}/{path}", content);
+        return response.IsSuccessStatusCode
+            ? $"{supabaseUrl}/storage/v1/object/public/{bucket}/{path}"
+            : null;
     }
-    
+
+    string? cvFileUrl = null;
+    string? appFileUrl = null;
+
+    if (formData.CvFile != null)
+    {
+        var path = $"{userId}/{formData.CvFile.FileName}";
+        cvFileUrl = await UploadFile(formData.CvFile, "job-application-files", path);
+    }
+
+    if (formData.AppFile != null)
+    {
+        var path = $"{userId}/{formData.AppFile.FileName}";
+        appFileUrl = await UploadFile(formData.AppFile, "job-application-files", path);
+    }
+
+    var job = new JobApplication
+    {
+        Id = Guid.NewGuid(),
+        Title = formData.Title,
+        Description = formData.Description,
+        JobLink = formData.JobLink,
+        CvFileUrl = cvFileUrl ?? string.Empty,
+        AppFileUrl = appFileUrl ?? string.Empty,
+        ApplicationStatus = string.IsNullOrWhiteSpace(formData.ApplicationStatus)
+        ? "applied"
+        :formData.ApplicationStatus,
+        CreatedAt = DateTime.Now,
+        // 👇 this assumes you add UserId property to your model
+        UserId = userId.Value
+    };
+
     try
     {
-        if (string.IsNullOrEmpty(model.Title) || string.IsNullOrEmpty(model.Description))
+        var result = await supabase.From<JobApplication>().Insert(job, new QueryOptions
         {
-            return Results.BadRequest("Title or description is requiered");
-        }
+            Returning = QueryOptions.ReturnType.Representation
+        });
 
-        string? cvFileUrl = null;
-        string? appFileUrl = null;
-        string bucketName = "job-application-files";
+        var inserted = result.Models.First();
 
-        if (model.CvFile != null && model.CvFile.Length > 0)
+        return Results.Ok(new JobApplicationDto
         {
-            var fileName = $"{Guid.NewGuid()}_{model.CvFile.FileName}";
-            var cvFilePath = $"cvs/{userId}/{fileName}";
-
-            using var stream = new MemoryStream();
-            await model.CvFile.CopyToAsync(stream);
-            stream.Position = 0;
-
-            await client.Storage.From(bucketName).Upload(stream.ToArray(), cvFilePath);
-            cvFileUrl = client.Storage.From(bucketName).GetPublicUrl(cvFilePath);
-        }
-
-        if (model.AppFile != null && model.AppFile.Length > 0)
-        {
-            var appFileName = $"{Guid.NewGuid()}_{model.AppFile.FileName}";
-            var appFilePath = $"apps/{userId}/{appFileName}";
-
-            using var stream = new MemoryStream();
-            await model.AppFile.CopyToAsync(stream);
-            stream.Position = 0;
-
-            await client.Storage.From(bucketName).Upload(stream.ToArray(), appFilePath);
-            appFileUrl = client.Storage.From(bucketName).GetPublicUrl(appFilePath);
-        }
-
-        var newJob = new JobApplication
-        {
-            Id = Guid.NewGuid(),
-            UserId = userId.Value,
-            Title = model.Title,
-            Description = model.Description,
-            JobLink = model.JobLink,
-            CvFileUrl = cvFileUrl,
-            AppFileUrl = appFileUrl,
-            ApplicationStatus = model.ApplicationStatus,
-            CreatedAt = DateTime.UtcNow,
-        };
-
-        var dbResponse = await client.From<JobApplication>().Insert(newJob);
-        var insertedJob = dbResponse.Models.FirstOrDefault();
-
-        if (insertedJob == null)
-        {
-            return Results.Problem("Failed to insert");
-        }
-
-        var insertedJobDto = new JobApplicationDto
-        {
-            Id = insertedJob.Id,
-            UserId = insertedJob.UserId,
-            Title = insertedJob.Title,
-            Description = insertedJob.Description,
-            JobLink = insertedJob.JobLink,
-            CvFileUrl = insertedJob.CvFileUrl,
-            AppFileUrl = insertedJob.AppFileUrl,
-            ApplicationStatus = insertedJob.ApplicationStatus,
-            CreatedAt = insertedJob.CreatedAt,
-        };
-
-        return Results.Created($"/jobs/{insertedJobDto.Id}", insertedJobDto);
+            Id = inserted.Id,
+            Title = inserted.Title,
+            Description = inserted.Description,
+            JobLink = inserted.JobLink,
+            CvFileUrl = inserted.CvFileUrl,
+            AppFileUrl = inserted.AppFileUrl,
+            ApplicationStatus = inserted.ApplicationStatus,
+            CreatedAt = inserted.CreatedAt
+        });
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"Error processing job creation with file upload: {ex.Message}");
-        return Results.Problem("Internal error during job creation or file upload: " + ex.Message);
+        return Results.Problem("Error inserting job: " + ex.Message);
     }
 })
+.Accepts<CreateJobApplicationViewModel>("multipart/form-data")
+.Produces<JobApplicationDto>()
+.DisableAntiforgery()
 .RequireAuthorization();
 
 app.Run();
